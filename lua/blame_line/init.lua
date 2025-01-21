@@ -676,6 +676,33 @@ blame_line.__detail.is_buffer_git_tracked = function()
 	return true
 end
 
+-- Returns whether any filter was applied when this repository was cloned. If
+-- this was some sort of sparse clone, it may not contain the blobs needed to
+-- generate blame. That being the case, git will attempt to download the
+-- necessary information from the remote, but this is a potentially lengthy
+-- and unreliable process (a file with many commits will require many downloads,
+-- which proceed serially, during which git sometimes hangs). Technically
+-- filters don't only deal with not downloading some or all blobs (see the
+-- filter option in man giv-rev-list for a full description of filters), but
+-- for our purposes, any project with a filter applied will be considered
+-- unviable for blaming
+--
+-- @return boolean
+-- @function blame_line.__detail.has_partial_clone_filter()
+blame_line.__detail.has_partial_clone_filter = function()
+	if string.len(vim.fn.expand("%:p")) == 0 then
+		return false
+	end
+
+	local dir_path = vim.fn.shellescape(
+		blame_line.__detail.substitute_path_separator(
+			vim.fn.expand("%:h")
+		)
+	)
+	return vim.fn.system("git -C " .. dir_path ..
+		" config get remote.origin.partialclonefilter"):len() ~= 0
+end
+
 -- Enables showing the blame line, refreshes it, and displays it
 -- Called when `config.show_in_insert` is false and an `InsertLeave` event occurs
 -- (so we show the blame line in normal mode, but not insert mode)
@@ -718,9 +745,15 @@ blame_line.__detail.on_buf_enter = function()
 	end
 
 	if blame_line.__detail.is_buffer_git_tracked() then
-		blame_line.__detail.buffer_enabled = true
-		blame_line.__detail.update_git_user_config()
-		blame_line.__detail.enable_show()
+		if blame_line.__detail.has_partial_clone_filter() then
+			blame_line.__detail.buffer_enabled = false
+			vim.notify("Because its repository was cloned using a partial clone filter,"..
+				" blame_line.nvim will be turned off for this buffer", vim.log.INFO)
+		else
+			blame_line.__detail.buffer_enabled = true
+			blame_line.__detail.update_git_user_config()
+			blame_line.__detail.enable_show()
+		end
 	else
 		blame_line.__detail.buffer_enabled = false
 	end
@@ -758,7 +791,8 @@ end
 -- @function blame_line.__detail.enable()
 blame_line.enable = function()
 	blame_line.__detail.enabled = true
-	blame_line.__detail.buffer_enabled = blame_line.__detail.is_buffer_git_tracked()
+	blame_line.__detail.buffer_enabled = blame_line.__detail.is_buffer_git_tracked() and
+		not blame_line.__detail.has_partial_clone_filter()
 
 	blame_line.__detail.refresh()
 end
